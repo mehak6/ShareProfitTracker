@@ -100,6 +100,22 @@ class DatabaseManager:
                 );
             ''')
             
+            # Create essential indexes for performance (idempotent)
+            try:
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_stocks_user_symbol ON stocks(user_id, symbol)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_stocks_user_id ON stocks(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_price_cache_symbol ON price_cache(symbol)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_price_cache_updated ON price_cache(last_updated)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_cash_transactions_user ON cash_transactions(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_cash_transactions_date ON cash_transactions(transaction_date)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_other_expenses_user ON other_expenses(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_other_expenses_date ON other_expenses(expense_date)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_dividends_user ON dividends(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_dividends_symbol ON dividends(symbol)')
+            except Exception:
+                # Index creation is idempotent; ignore if unsupported or already exists
+                pass
+            
             # Add cash_invested column to existing tables if it doesn't exist
             try:
                 conn.execute('ALTER TABLE stocks ADD COLUMN cash_invested REAL DEFAULT 0')
