@@ -8,11 +8,14 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.database import DatabaseManager
+from data.async_database import AsyncDatabaseManager
 from data.models import Stock, PortfolioSummary
-from services.enhanced_price_fetcher import enhanced_price_fetcher, get_current_price, get_multiple_prices
-from services.ultra_fast_price_fetcher import ultra_fast_price_fetcher, get_multiple_prices_ultra_fast, get_detailed_price_data_ultra_fast
-from services.simple_fast_refresh import get_prices_blazing_fast
+from services.unified_price_service import (
+    get_current_price,
+    get_multiple_prices,
+    get_multiple_prices_ultra_fast,
+    get_detailed_price_data_ultra_fast,
+)
 from services.calculator import PortfolioCalculator
 from utils.config import AppConfig
 from utils.helpers import FormatHelper, FileHelper
@@ -31,8 +34,7 @@ except ImportError:
 class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
-        self.db_manager = DatabaseManager(AppConfig.get_database_path())
-        self.price_fetcher = ultra_fast_price_fetcher  # Use ultra-fast fetcher
+        self.db_manager = AsyncDatabaseManager(AppConfig.get_database_path())
         self.calculator = PortfolioCalculator()
         self.theme_manager = ThemeManager()
         
@@ -407,29 +409,36 @@ class MainWindow:
     def load_portfolio(self):
         self.status_var.set("Loading portfolio...")
         
-        try:
-            stock_data = self.db_manager.get_all_stocks()
-            self.stocks = [Stock(**data) for data in stock_data]
-            
-            print(f"DEBUG load_portfolio: Found {len(stock_data)} records in database")
-            print(f"DEBUG load_portfolio: Created {len(self.stocks)} stock objects")
-            
-            self.update_portfolio_display()
-            self.update_summary_display()
-            
-            # Update notifications panel with new stock list
-            if hasattr(self, 'notifications_panel') and self.notifications_panel:
-                self.notifications_panel.update_stocks(self.stocks)
-            
-            if self.stocks:
-                self.status_var.set(f"Loaded {len(self.stocks)} stocks")
-            else:
-                self.status_var.set("No stocks in portfolio")
+        def worker():
+            import asyncio
+            try:
+                stock_data = asyncio.run(self.db_manager.get_all_stocks_async())
                 
-        except Exception as e:
-            print(f"DEBUG load_portfolio ERROR: {e}")
-            messagebox.showerror("Error", f"Failed to load portfolio: {str(e)}")
-            self.status_var.set("Error loading portfolio")
+                def apply_results():
+                    try:
+                        self.stocks = [Stock(**data) for data in stock_data]
+                        print(f"DEBUG load_portfolio: Found {len(stock_data)} records in database")
+                        print(f"DEBUG load_portfolio: Created {len(self.stocks)} stock objects")
+                        self.update_portfolio_display()
+                        self.update_summary_display()
+                        if hasattr(self, 'notifications_panel') and self.notifications_panel:
+                            self.notifications_panel.update_stocks(self.stocks)
+                        if self.stocks:
+                            self.status_var.set(f"Loaded {len(self.stocks)} stocks")
+                        else:
+                            self.status_var.set("No stocks in portfolio")
+                    except Exception as e:
+                        print(f"DEBUG load_portfolio apply ERROR: {e}")
+                        messagebox.showerror("Error", f"Failed to render portfolio: {str(e)}")
+                        self.status_var.set("Error loading portfolio")
+                self.root.after(0, apply_results)
+            except Exception as e:
+                def on_err():
+                    print(f"DEBUG load_portfolio ERROR: {e}")
+                    messagebox.showerror("Error", f"Failed to load portfolio: {str(e)}")
+                    self.status_var.set("Error loading portfolio")
+                self.root.after(0, on_err)
+        threading.Thread(target=worker, daemon=True).start()
     
     def update_portfolio_display(self):
         # Filter and sort stocks
@@ -622,6 +631,34 @@ class MainWindow:
                 else:
                     print(f"DEBUG: No price data found for {stock.symbol}")
             
+            # Persist updates asynchronously in batch
+            try:
+                import asyncio
+                async def persist_updates_fast():
+                    tasks = []
+                    for stock in self.stocks:
+                        if stock.current_price is not None:
+                            tasks.append(self.db_manager.update_price_cache_async(stock.symbol, stock.current_price))
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                asyncio.run(persist_updates_fast())
+            except Exception as e:
+                print(f"WARN: Batch DB cache update (fast) encountered issues: {e}")
+
+            # Persist updates asynchronously in batch
+            try:
+                import asyncio
+                async def persist_updates_ultra():
+                    tasks = []
+                    for stock in self.stocks:
+                        if stock.current_price is not None:
+                            tasks.append(self.db_manager.update_price_cache_async(stock.symbol, stock.current_price))
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                asyncio.run(persist_updates_ultra())
+            except Exception as e:
+                print(f"WARN: Batch DB cache update (ultra) encountered issues: {e}")
+
             self.last_update_time = datetime.now()
             
             # Success message
@@ -640,35 +677,9 @@ class MainWindow:
         """Complete normal price refresh"""
         print(f"DEBUG: Completing normal price refresh")
         
-        # Reload from database to ensure we have latest data
-        try:
-            print(f"DEBUG: About to reload stocks from database...")
-            stock_data = self.db_manager.get_all_stocks()
-            
-            print(f"DEBUG: Database returned {len(stock_data)} stocks")
-            for data in stock_data[:3]:
-                print(f"  DB Stock {data.get('symbol')}: price={data.get('current_price')}")
-            
-            # Create new stock objects
-            old_stock_count = len(self.stocks)
-            self.stocks = [Stock(**data) for data in stock_data]
-            
-            print(f"DEBUG: Created {len(self.stocks)} stock objects (was {old_stock_count})")
-            for stock in self.stocks[:3]:
-                print(f"  Stock object {stock.symbol}: current_price={stock.current_price}")
-                
-        except Exception as e:
-            print(f"ERROR: Failed to reload from database: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        print(f"DEBUG: About to update portfolio display...")
-        # Update displays
-        self.update_portfolio_display()
-        print(f"DEBUG: Portfolio display updated")
-        
-        self.update_summary_display()
-        print(f"DEBUG: Summary display updated")
+        # Reload portfolio asynchronously to avoid blocking UI
+        print(f"DEBUG: Triggering async reload after normal refresh")
+        self.load_portfolio()
         
         # Update notifications with latest stock data
         if hasattr(self, 'notifications_panel') and self.notifications_panel:
@@ -722,9 +733,9 @@ class MainWindow:
             # Show progress
             self.root.after(0, lambda: self.status_var.set(f"Fetching {len(symbols)} prices with maximum speed..."))
             
-            # Use blazing fast refresh method
+            # Use blazing fast refresh method (mapped to unified normal fetch)
             start_time = time.time()
-            price_results = get_prices_blazing_fast(symbols)
+            price_results = get_multiple_prices(symbols)
             fetch_time = time.time() - start_time
             
             # Update stocks with new prices
@@ -749,20 +760,8 @@ class MainWindow:
                     
                     stock.current_price = new_price
                     
-                    # Update database with new price
-                    try:
-                        self.db_manager.update_price_cache(stock.symbol, stock.current_price)
-                        
-                        # Verify database update
-                        cached_price = self.db_manager.get_cached_price(stock.symbol)
-                        if cached_price:
-                            print(f"DEBUG: Verified DB update for {stock.symbol}: {cached_price['current_price']}")
-                        
-                        updated_count += 1
-                        successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
-                        print(f"DEBUG: Updated {stock.symbol} price successfully in DB")
-                    except Exception as e:
-                        print(f"ERROR: Failed to update {stock.symbol} in database: {e}")
+                    updated_count += 1
+                    successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
                 else:
                     print(f"DEBUG: No price data for {stock.symbol}")
             
@@ -797,31 +796,9 @@ class MainWindow:
         """Complete blazing fast refresh"""
         print(f"DEBUG: Completing blazing fast refresh - updating UI")
         
-        # Force reload from database to ensure we have latest data
-        try:
-            print(f"DEBUG: Reloading portfolio from database")
-            stock_data = self.db_manager.get_all_stocks()
-            
-            print(f"DEBUG: Raw stock data from DB:")
-            for data in stock_data[:3]:  # Show first 3 stocks
-                print(f"  {data.get('symbol', 'NO_SYMBOL')}: current_price={data.get('current_price', 'NO_PRICE')}")
-            
-            self.stocks = [Stock(**data) for data in stock_data]
-            
-            print(f"DEBUG: Stock objects after reload:")
-            for stock in self.stocks[:3]:  # Show first 3 stocks
-                print(f"  {stock.symbol}: current_price={stock.current_price}, current_value={stock.current_value}")
-                
-            print(f"DEBUG: Reloaded {len(self.stocks)} stocks from database")
-        except Exception as e:
-            print(f"ERROR: Failed to reload from database: {e}")
-        
-        print(f"DEBUG: About to update portfolio display...")
-        # Update displays
-        self.update_portfolio_display()
-        print(f"DEBUG: Portfolio display updated")
-        self.update_summary_display()
-        print(f"DEBUG: Summary display updated")
+        # Reload portfolio asynchronously to avoid blocking UI
+        print(f"DEBUG: Triggering async reload after blazing fast refresh")
+        self.load_portfolio()
         
         # Show performance info
         update_text = f"Last updated: {self.last_update_time.strftime('%H:%M:%S')} (BLAZING FAST: {fetch_time:.1f}s)"
@@ -863,7 +840,7 @@ class MainWindow:
             
             # Use ultra-fast fetcher with maximum performance
             start_time = time.time()
-            detailed_prices = ultra_fast_price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            detailed_prices = get_detailed_price_data_ultra_fast(symbols)
             fetch_time = time.time() - start_time
             
             # Update database and stocks with better error handling
@@ -877,9 +854,8 @@ class MainWindow:
                         old_price = stock.current_price
                         stock.current_price = price_data['current_price']
                         
-                        # Only update database if price actually changed
+                        # Count update if changed
                         if old_price != stock.current_price:
-                            self.db_manager.update_price_cache(stock.symbol, stock.current_price)
                             updated_count += 1
                         
                         # Track cache hits
@@ -933,7 +909,7 @@ class MainWindow:
             symbols = [stock.symbol for stock in self.stocks]
             
             # Use ultra-fast price fetcher with aggressive optimizations
-            detailed_prices = self.price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            detailed_prices = get_detailed_price_data_ultra_fast(symbols)
             
             # Update database and stocks with better error handling
             updated_count = 0
