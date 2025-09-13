@@ -12,6 +12,7 @@ class Stock:
     broker: str = ""
     cash_invested: float = 0
     id: Optional[int] = None
+    user_id: Optional[int] = None
     current_price: Optional[float] = None
     last_updated: Optional[str] = None
     created_at: Optional[str] = None

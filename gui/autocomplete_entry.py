@@ -1,17 +1,27 @@
 import tkinter as tk
 from tkinter import ttk
 from typing import List, Tuple, Callable, Optional
+import sys
+import os
+
+# Add parent directory to sys.path to import enhanced_stock_symbols
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
+from data.enhanced_stock_symbols import search_stocks
 
 class AutocompleteEntry(ttk.Frame):
     """
     Entry widget with autocomplete dropdown functionality
     """
     
-    def __init__(self, parent, search_function: Callable[[str], List[Tuple[str, str]]], 
+    def __init__(self, parent, search_function: Optional[Callable[[str], List[Tuple[str, str]]]] = None, 
                  on_selection: Optional[Callable[[str, str], None]] = None, **kwargs):
         super().__init__(parent)
         
-        self.search_function = search_function
+        # Use enhanced stock symbols search if no custom search function provided
+        self.search_function = search_function if search_function else search_stocks
         self.on_selection = on_selection
         self.suggestions = []
         
@@ -77,7 +87,7 @@ class AutocompleteEntry(ttk.Frame):
         """Handle text changes in the entry"""
         text = self.entry_var.get().strip()
         
-        if len(text) >= 2:  # Start searching after 2 characters for better performance
+        if len(text) >= 1:  # Start searching after 1 character with enhanced search
             self.suggestions = self.search_function(text)
             
             if self.suggestions:
@@ -86,7 +96,13 @@ class AutocompleteEntry(ttk.Frame):
             else:
                 self.hide_dropdown()
         elif len(text) == 0:
-            self.hide_dropdown()
+            # Show popular stocks for empty search
+            self.suggestions = self.search_function("")
+            if self.suggestions:
+                self.show_dropdown()
+                self.update_listbox()
+            else:
+                self.hide_dropdown()
     
     def on_key_press(self, event):
         """Handle key presses"""
@@ -231,3 +247,11 @@ class AutocompleteEntry(ttk.Frame):
         if self.dropdown_frame:
             self.dropdown_frame.destroy()
         super().destroy()
+    
+    @classmethod
+    def create_stock_autocomplete(cls, parent, on_selection: Optional[Callable[[str, str], None]] = None, **kwargs):
+        """
+        Convenience method to create an autocomplete entry specifically for stock symbols
+        Uses the enhanced stock symbols database with all 2152+ NSE stocks
+        """
+        return cls(parent, search_function=None, on_selection=on_selection, **kwargs)

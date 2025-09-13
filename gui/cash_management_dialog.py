@@ -79,15 +79,21 @@ class CashManagementDialog:
         self.amount_entry = ttk.Entry(amount_frame, textvariable=self.amount_var, width=15)
         self.amount_entry.pack(side="left", fill="x", expand=True)
         
+        # Date with calendar picker
+        ttk.Label(add_frame, text="Date:").grid(row=1, column=0, sticky="w", pady=(5, 0))
+        from gui.date_picker import DatePickerEntry
+        self.date_picker = DatePickerEntry(add_frame, initial_date=datetime.now().strftime("%Y-%m-%d"))
+        self.date_picker.grid(row=1, column=1, sticky="w", pady=(5, 0), padx=(0, 10))
+        
         # Description
-        ttk.Label(add_frame, text="Description:").grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(add_frame, text="Description:").grid(row=2, column=0, sticky="w", pady=(5, 0))
         self.description_var = tk.StringVar()
         self.description_entry = ttk.Entry(add_frame, textvariable=self.description_var, width=40)
-        self.description_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(5, 0), padx=(0, 10))
+        self.description_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(5, 0), padx=(0, 10))
         
         # Add button
         ttk.Button(add_frame, text="Add Transaction", 
-                  command=self.add_transaction).grid(row=1, column=3, pady=(5, 0))
+                  command=self.add_transaction).grid(row=2, column=3, pady=(5, 0))
         
         # Configure column weights
         add_frame.grid_columnconfigure(1, weight=1)
@@ -198,17 +204,31 @@ class CashManagementDialog:
                 messagebox.showerror("Error", "Please enter a valid amount")
                 return
             
+            # Get date from picker
+            date_str = self.date_picker.get().strip()
+            if not date_str:
+                messagebox.showerror("Error", "Please select a date")
+                return
+            
+            try:
+                # Validate date format
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showerror("Error", "Invalid date format")
+                return
+            
             transaction_type = self.type_var.get()
             description = self.description_var.get().strip()
             
-            # Add to database
+            # Add to database with custom date
             self.db_manager.add_cash_transaction(
                 transaction_type=transaction_type,
                 amount=amount,
-                description=description
+                description=description,
+                transaction_date=date_str
             )
             
-            # Clear inputs
+            # Clear inputs except date (keep current date for convenience)
             self.amount_var.set("")
             self.description_var.set("")
             

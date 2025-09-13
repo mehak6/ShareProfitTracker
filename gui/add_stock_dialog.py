@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.models import Stock
-from data.stock_symbols import search_stocks, get_company_name
+from data.enhanced_stock_symbols import search_stocks, get_company_name
 from utils.helpers import ValidationHelper
 try:
     from gui.autocomplete_entry import AutocompleteEntry
@@ -123,8 +123,24 @@ class AddStockDialog:
     
     def on_symbol_selected(self, symbol: str, company: str):
         """Callback when a stock symbol is selected from autocomplete"""
-        self.company_var.set(company)
-        # Move focus to quantity field
+        # Set company name immediately for better UX
+        if company:
+            self.company_var.set(company)
+        else:
+            # Try to get company name asynchronously to avoid blocking
+            import threading
+            def get_company_async():
+                try:
+                    from data.enhanced_stock_symbols import get_company_name
+                    company_name = get_company_name(symbol)
+                    if company_name:
+                        self.dialog.after(0, lambda: self.company_var.set(company_name))
+                except Exception as e:
+                    print(f"Could not fetch company name: {e}")
+            
+            threading.Thread(target=get_company_async, daemon=True).start()
+        
+        # Move focus to quantity field immediately
         self.quantity_entry.focus()
     
     def populate_fields(self):
@@ -211,28 +227,47 @@ class AddStockDialog:
         if not self.validate_input():
             return
         
-        try:
-            # Prepare result data
-            symbol = self.symbol_autocomplete.get().strip().upper()
-            company_name = self.company_var.get().strip()
-            
-            # Auto-fill company name if not provided
-            if not company_name:
-                company_name = get_company_name(symbol)
-            
-            self.result = {
-                'symbol': symbol,
-                'company_name': company_name or None,
-                'quantity': float(self.quantity_var.get().strip()),
-                'purchase_price': float(self.price_var.get().strip()),
-                'purchase_date': self.date_var.get().strip(),
-                'broker': self.broker_var.get().strip() or ""
-            }
-            
-            self.dialog.destroy()
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to process input: {str(e)}")
+        # Show saving indicator
+        self.dialog.config(cursor="wait")
+        
+        def save_async():
+            try:
+                # Prepare result data
+                symbol = self.symbol_autocomplete.get().strip().upper()
+                company_name = self.company_var.get().strip()
+                
+                # Auto-fill company name if not provided (non-blocking)
+                if not company_name:
+                    try:
+                        company_name = get_company_name(symbol)
+                    except Exception:
+                        company_name = None  # Don't block on company name fetch
+                
+                result = {
+                    'symbol': symbol,
+                    'company_name': company_name or None,
+                    'quantity': float(self.quantity_var.get().strip()),
+                    'purchase_price': float(self.price_var.get().strip()),
+                    'purchase_date': self.date_var.get().strip(),
+                    'broker': self.broker_var.get().strip() or ""
+                }
+                
+                # Update UI on main thread
+                self.dialog.after(0, lambda: self._finish_save(result))
+                
+            except Exception as e:
+                self.dialog.after(0, lambda: messagebox.showerror("Error", f"Failed to process input: {str(e)}"))
+                self.dialog.after(0, lambda: self.dialog.config(cursor=""))
+        
+        # Run save in background thread for better performance
+        import threading
+        threading.Thread(target=save_async, daemon=True).start()
+    
+    def _finish_save(self, result):
+        """Complete the save operation on the main thread"""
+        self.result = result
+        self.dialog.config(cursor="")
+        self.dialog.destroy()
     
     def cancel(self):
         self.result = None

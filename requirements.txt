@@ -1,1 +1,3 @@
 yfinance>=0.2.18
+nsepython>=2.97
+nsetools>=2.0.1

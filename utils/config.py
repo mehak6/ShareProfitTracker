@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import Any, Dict
 
 class AppConfig:
@@ -37,7 +38,13 @@ class AppConfig:
     
     @classmethod
     def get_database_path(cls) -> str:
-        app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Check if running as executable (PyInstaller)
+        if getattr(sys, 'frozen', False):
+            # Running as executable - use executable directory
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            # Running as script - use source directory
+            app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(app_dir, cls.DATABASE_NAME)
     
     @classmethod

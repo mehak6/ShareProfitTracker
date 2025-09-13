@@ -1,0 +1,61 @@
+{
+  "last_updated": "2025-09-11T15:50:44.832119",
+  "actions": [
+    {
+      "symbol": "RELIANCE.NS",
+      "company_name": "Reliance Industries Limited",
+      "action_type": "dividend",
+      "announcement_date": "2025-09-01",
+      "ex_date": "2025-09-26",
+      "record_date": "2025-09-27",
+      "payment_date": "2025-10-26",
+      "dividend_amount": 8.0,
+      "ratio_from": null,
+      "ratio_to": null,
+      "purpose": "Interim dividend",
+      "remarks": "Subject to shareholder approval"
+    },
+    {
+      "symbol": "INFY.NS",
+      "company_name": "Infosys Limited",
+      "action_type": "dividend",
+      "announcement_date": "2025-09-01",
+      "ex_date": "2025-10-06",
+      "record_date": "2025-10-07",
+      "payment_date": "2025-11-05",
+      "dividend_amount": 16.0,
+      "ratio_from": null,
+      "ratio_to": null,
+      "purpose": "Interim dividend",
+      "remarks": "Subject to shareholder approval"
+    },
+    {
+      "symbol": "WIPRO.NS",
+      "company_name": "Wipro Limited",
+      "action_type": "split",
+      "announcement_date": "2025-09-01",
+      "ex_date": "2025-10-26",
+      "record_date": "2025-10-27",
+      "payment_date": "2025-11-25",
+      "dividend_amount": null,
+      "ratio_from": 1,
+      "ratio_to": 2,
+      "purpose": "Stock split",
+      "remarks": "Subject to shareholder approval"
+    },
+    {
+      "symbol": "SYRMA",
+      "company_name": "Syrma SGS Technology Limited",
+      "action_type": "bonus",
+      "announcement_date": "2025-09-01",
+      "ex_date": "2025-10-11",
+      "record_date": "2025-10-12",
+      "payment_date": "2025-11-10",
+      "dividend_amount": null,
+      "ratio_from": 1,
+      "ratio_to": 1,
+      "purpose": "Stock bonus",
+      "remarks": "Subject to shareholder approval"
+    }
+  ]
+}

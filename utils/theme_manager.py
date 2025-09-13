@@ -30,38 +30,12 @@ class ThemeManager:
                 "tree_fg": "#000000",
                 "tree_select_bg": "#0078D4",
                 "tree_select_fg": "#FFFFFF"
-            },
-            "dark": {
-                "bg": "#2B2B2B",
-                "fg": "#FFFFFF",
-                "select_bg": "#404040",
-                "select_fg": "#FFFFFF",
-                "entry_bg": "#404040",
-                "entry_fg": "#FFFFFF",
-                "button_bg": "#404040",
-                "button_fg": "#FFFFFF",
-                "frame_bg": "#353535",
-                "header_bg": "#404040",
-                "profit_color": "#00FF00",
-                "loss_color": "#FF6B6B",
-                "neutral_color": "#FFFFFF",
-                "border_color": "#555555",
-                "tree_bg": "#2B2B2B",
-                "tree_fg": "#FFFFFF",
-                "tree_select_bg": "#0078D4",
-                "tree_select_fg": "#FFFFFF"
             }
         }
     
     def load_theme_preference(self):
-        """Load saved theme preference"""
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    config = json.load(f)
-                    self.current_theme = config.get('theme', 'light')
-        except:
-            self.current_theme = "light"
+        """Load saved theme preference - force light theme only"""
+        self.current_theme = "light"
     
     def save_theme_preference(self):
         """Save current theme preference"""
@@ -73,8 +47,8 @@ class ThemeManager:
             pass
     
     def toggle_theme(self):
-        """Toggle between light and dark themes"""
-        self.current_theme = "dark" if self.current_theme == "light" else "light"
+        """Keep light theme only - no toggling needed"""
+        self.current_theme = "light"
         self.save_theme_preference()
     
     def get_theme_colors(self):
@@ -82,8 +56,8 @@ class ThemeManager:
         return self.themes[self.current_theme]
     
     def is_dark_theme(self):
-        """Check if current theme is dark"""
-        return self.current_theme == "dark"
+        """Check if current theme is dark - always False now"""
+        return False
     
     def apply_theme_to_widget(self, widget, widget_type="default"):
         """Apply theme to a specific widget"""
@@ -192,7 +166,7 @@ class ThemeManager:
                        borderwidth=1,
                        arrowcolor=colors["fg"])
         
-        # Map states for hover effects
+        # Map states for hover effects (light mode only)
         style.map("TButton",
                  background=[('active', colors["select_bg"]),
                            ('pressed', colors["select_bg"])])

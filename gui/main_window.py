@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 import threading
+import time
 from typing import List, Optional
 import sys
 import os
@@ -9,21 +10,29 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.database import DatabaseManager
 from data.models import Stock, PortfolioSummary
-from services.price_fetcher import PriceFetcher
+from services.enhanced_price_fetcher import enhanced_price_fetcher, get_current_price, get_multiple_prices
+from services.ultra_fast_price_fetcher import ultra_fast_price_fetcher, get_multiple_prices_ultra_fast, get_detailed_price_data_ultra_fast
+from services.simple_fast_refresh import get_prices_blazing_fast
 from services.calculator import PortfolioCalculator
 from utils.config import AppConfig
 from utils.helpers import FormatHelper, FileHelper
 from utils.theme_manager import ThemeManager
 try:
     from gui.add_stock_dialog import AddStockDialog
+    from gui.modern_ui import ModernUI, MetricCalculator
+    from gui.notifications_panel import NotificationsPanel
+    from gui.settings_dialog import SettingsDialog
 except ImportError:
     from .add_stock_dialog import AddStockDialog
+    from .modern_ui import ModernUI, MetricCalculator
+    from .notifications_panel import NotificationsPanel
+    from .settings_dialog import SettingsDialog
 
 class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.db_manager = DatabaseManager(AppConfig.get_database_path())
-        self.price_fetcher = PriceFetcher()
+        self.price_fetcher = ultra_fast_price_fetcher  # Use ultra-fast fetcher
         self.calculator = PortfolioCalculator()
         self.theme_manager = ThemeManager()
         
@@ -31,8 +40,10 @@ class MainWindow:
         self.portfolio_summary: Optional[PortfolioSummary] = None
         self.last_update_time: Optional[datetime] = None
         self.is_updating = False
+        self.notifications_panel = None
         
         self.setup_window()
+        self.configure_modern_ui()
         self.create_widgets()
         self.load_portfolio()
         self.apply_theme()
@@ -43,21 +54,173 @@ class MainWindow:
         self.root.minsize(AppConfig.MIN_WINDOW_WIDTH, AppConfig.MIN_WINDOW_HEIGHT)
         
         # Configure grid weights
-        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(3, weight=1)  # Main content frame gets most space
         self.root.grid_columnconfigure(0, weight=1)
     
+    def configure_modern_ui(self):
+        """Configure modern UI styling"""
+        self.style = ModernUI.configure_style(self.root)
+    
     def create_widgets(self):
-        # Header frame
-        self.create_header_frame()
+        # Modern toolbar
+        self.create_modern_toolbar()
         
-        # Main content frame
-        self.create_main_frame()
+        # Dashboard
+        self.create_dashboard()
         
-        # Summary frame
-        self.create_summary_frame()
+        # Create tabbed interface
+        self.create_tabbed_interface()
         
-        # Status bar
+        # Status bar with balance only
         self.create_status_bar()
+    
+    def create_modern_toolbar(self):
+        """Create modern toolbar with icons"""
+        self.toolbar_frame, self.toolbar_left, self.toolbar_right = ModernUI.create_modern_toolbar(self.root)
+        self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        
+        # Connect toolbar buttons to existing methods
+        buttons = self.toolbar_left.winfo_children()
+        if len(buttons) >= 3:
+            buttons[0].configure(command=self.add_stock)  # Add Stock
+            buttons[1].configure(command=self.refresh_prices)  # Refresh Prices
+            buttons[2].configure(command=self.export_portfolio)  # Export Report
+        
+        # Add user selection dropdown between toolbar sections
+        self.create_user_selection()
+        
+        # Connect settings button
+        settings_buttons = self.toolbar_right.winfo_children()
+        if len(settings_buttons) >= 1:
+            settings_buttons[0].configure(command=self.open_settings)  # Settings
+    
+    def create_user_selection(self):
+        """Create user selection dropdown in the toolbar"""
+        # Create a frame for user selection in the center of the toolbar
+        user_frame = tk.Frame(self.toolbar_frame)
+        user_frame.pack(side='left', fill='x', expand=True, padx=20)
+        
+        # Create a centered frame within user_frame
+        center_frame = tk.Frame(user_frame)
+        center_frame.pack(anchor='center')
+        
+        # Label
+        user_label = tk.Label(center_frame, text="User:", font=("Arial", 9, "bold"))
+        user_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Get users from database
+        users = self.db_manager.get_all_users()
+        active_user = self.db_manager.get_active_user()
+        
+        # User selection dropdown
+        self.user_var = tk.StringVar()
+        user_values = [f"{user['display_name']}" for user in users]
+        
+        # Set current active user
+        if active_user:
+            self.user_var.set(active_user['display_name'])
+        elif user_values:
+            self.user_var.set(user_values[0])
+        
+        self.user_combobox = ttk.Combobox(center_frame, textvariable=self.user_var, 
+                                         values=user_values, state="readonly", width=15)
+        self.user_combobox.pack(side=tk.LEFT)
+        self.user_combobox.bind("<<ComboboxSelected>>", self.on_user_changed)
+        
+        # Store user mapping for quick lookup
+        self.user_mapping = {user['display_name']: user['id'] for user in users}
+    
+    def create_dashboard(self):
+        """Create dashboard with key metrics"""
+        self.dashboard_frame, self.metrics_frame = ModernUI.create_dashboard_summary(self.root)
+        self.dashboard_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(10, 0))
+        
+        # Create metric cards - will be populated in update_dashboard
+        self.metric_cards = {}
+    
+    def update_dashboard(self):
+        """Update dashboard metrics"""
+        # Clear existing metric cards
+        for card in self.metric_cards.values():
+            card.destroy()
+        self.metric_cards.clear()
+        
+        # Calculate metrics
+        metrics = MetricCalculator.calculate_portfolio_metrics(self.stocks)
+        
+        # Create metric cards
+        cards_data = [
+            ("Total Investment", MetricCalculator.format_currency(metrics['total_investment']), None, None),
+            ("Current Value", MetricCalculator.format_currency(metrics['current_value']), None, None),
+            ("Total Gain/Loss", MetricCalculator.format_currency(metrics['total_gain_loss']), 
+             MetricCalculator.format_percentage(metrics['total_gain_loss_pct']), 
+             'positive' if metrics['total_gain_loss'] >= 0 else 'negative'),
+            ("Total Stocks", str(metrics['total_stocks']), None, None)
+        ]
+        
+        for i, (title, value, change, change_type) in enumerate(cards_data):
+            card = ModernUI.create_metric_card(self.metrics_frame, title, value, change, change_type)
+            card.grid(row=0, column=i, padx=(0, 15) if i < len(cards_data)-1 else 0, sticky="ew")
+            self.metric_cards[title] = card
+        
+        # Configure column weights for equal distribution
+        for i in range(len(cards_data)):
+            self.metrics_frame.grid_columnconfigure(i, weight=1)
+    
+    def create_tabbed_interface(self):
+        """Create tabbed interface with Portfolio and Notifications tabs"""
+        # Create notebook (tabbed interface)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.grid(row=2, column=0, sticky="nsew", padx=10, pady=(10, 0))
+        
+        # Configure main window to expand
+        self.root.grid_rowconfigure(2, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        
+        # Create Portfolio tab
+        self.portfolio_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.portfolio_frame, text="📊 Portfolio")
+        
+        # Create Notifications tab
+        self.notifications_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.notifications_frame, text="📢 Notifications")
+        
+        # Set up portfolio tab content
+        self.create_portfolio_tab()
+        
+        # Set up notifications tab content
+        self.create_notifications_tab()
+    
+    def create_portfolio_tab(self):
+        """Set up portfolio tab content"""
+        # Configure grid weights for portfolio frame
+        self.portfolio_frame.grid_rowconfigure(0, weight=1)
+        self.portfolio_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create portfolio table inside the portfolio tab
+        self.create_portfolio_table(self.portfolio_frame)
+        
+        # Create buttons frame inside portfolio tab  
+        self.create_buttons_frame(self.portfolio_frame)
+    
+    def create_notifications_tab(self):
+        """Set up notifications tab content"""
+        # Configure grid weights for notifications frame
+        self.notifications_frame.grid_rowconfigure(0, weight=1)
+        self.notifications_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create notifications panel within the tab
+        print(f"DEBUG: Creating notifications panel with {len(self.stocks)} stocks")
+        self.notifications_panel = NotificationsPanel(self.notifications_frame, self.stocks)
+        print(f"DEBUG: Notifications panel created")
+    
+    def open_settings(self):
+        """Open settings dialog"""
+        try:
+            settings_dialog = SettingsDialog(self.root)
+        except Exception as e:
+            print(f"Error opening settings: {e}")
+            messagebox.showerror("Error", f"Failed to open settings: {e}")
     
     def create_header_frame(self):
         header_frame = ttk.Frame(self.root, padding="10")
@@ -82,7 +245,7 @@ class MainWindow:
     
     def create_main_frame(self):
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=1, column=0, sticky="nsew")
+        main_frame.grid(row=3, column=0, sticky="nsew")
         main_frame.grid_rowconfigure(0, weight=1)
         main_frame.grid_columnconfigure(0, weight=1)
         
@@ -194,19 +357,13 @@ class MainWindow:
         ttk.Button(buttons_frame, text="Other Funds", 
                   command=self.manage_expenses).grid(row=0, column=6, padx=(0, 10))
         
-        # Theme Toggle Button
-        theme_text = "Dark Mode" if self.theme_manager.current_theme == "light" else "Light Mode"
-        self.theme_btn = ttk.Button(buttons_frame, text=theme_text, 
-                                   command=self.toggle_theme)
-        self.theme_btn.grid(row=0, column=7, padx=(0, 10))
-        
         # Tax Report Button
         ttk.Button(buttons_frame, text="Tax Report", 
-                  command=self.show_tax_report).grid(row=0, column=8, padx=(0, 10))
+                  command=self.show_tax_report).grid(row=0, column=7, padx=(0, 10))
     
     def create_summary_frame(self):
         summary_frame = ttk.LabelFrame(self.root, text="Portfolio Summary", padding="10")
-        summary_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        summary_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
         
         # Summary labels - Portfolio row
         self.total_investment_label = ttk.Label(summary_frame, text="Total Investment: ₹0.00")
@@ -227,12 +384,25 @@ class MainWindow:
         self.cash_balance_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
     
     def create_status_bar(self):
+        # Create status bar frame to hold both status and cash balance
+        status_frame = ttk.Frame(self.root)
+        status_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(5, 10))
+        status_frame.grid_columnconfigure(0, weight=1)  # Left side expands
+        
+        # Status message (left side)
         self.status_var = tk.StringVar()
         self.status_var.set("Ready")
+        status_label = ttk.Label(status_frame, textvariable=self.status_var, 
+                                relief="sunken", padding="5")
+        status_label.grid(row=0, column=0, sticky="ew")
         
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, 
-                              relief="sunken", padding="5")
-        status_bar.grid(row=3, column=0, sticky="ew")
+        # Cash balance (right side)
+        self.cash_balance_var = tk.StringVar()
+        self.cash_balance_var.set("Available Cash: ₹0.00")
+        self.cash_balance_status = ttk.Label(status_frame, textvariable=self.cash_balance_var,
+                                           relief="sunken", padding="5",
+                                           font=("Arial", 10, "bold"))
+        self.cash_balance_status.grid(row=0, column=1, sticky="e", padx=(10, 0))
     
     def load_portfolio(self):
         self.status_var.set("Loading portfolio...")
@@ -247,6 +417,10 @@ class MainWindow:
             self.update_portfolio_display()
             self.update_summary_display()
             
+            # Update notifications panel with new stock list
+            if hasattr(self, 'notifications_panel') and self.notifications_panel:
+                self.notifications_panel.update_stocks(self.stocks)
+            
             if self.stocks:
                 self.status_var.set(f"Loaded {len(self.stocks)} stocks")
             else:
@@ -258,14 +432,6 @@ class MainWindow:
             self.status_var.set("Error loading portfolio")
     
     def update_portfolio_display(self):
-        print(f"DEBUG update_portfolio_display: Updating display with {len(self.stocks)} stocks")
-        
-        # Clear existing items
-        existing_items = self.tree.get_children()
-        print(f"DEBUG update_portfolio_display: Clearing {len(existing_items)} existing items")
-        for item in existing_items:
-            self.tree.delete(item)
-        
         # Filter and sort stocks
         try:
             filtered_stocks = self.filter_and_sort_stocks(self.stocks)
@@ -273,11 +439,20 @@ class MainWindow:
             # Fallback if search/sort variables are not initialized yet
             filtered_stocks = self.stocks
         
-        print(f"DEBUG update_portfolio_display: Showing {len(filtered_stocks)} filtered stocks")
+        # Get current selection to restore it later
+        selected_symbols = []
+        for selected_item in self.tree.selection():
+            values = self.tree.item(selected_item)['values']
+            if values:
+                selected_symbols.append(values[0])
         
-        # Add stocks to table
-        for i, stock in enumerate(filtered_stocks):
-            print(f"DEBUG update_portfolio_display: Adding stock {i+1}: {stock.symbol}")
+        # Clear existing items only
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Batch insert items for better performance
+        items_to_insert = []
+        for stock in filtered_stocks:
             values = [
                 stock.symbol,
                 FormatHelper.truncate_text(stock.company_name or "", 20),
@@ -291,7 +466,7 @@ class MainWindow:
                 str(stock.days_held)
             ]
             
-            # Color coding for profit/loss - prepare the values first
+            # Color coding for profit/loss
             tags = []
             if stock.current_price is not None:
                 if stock.profit_loss_amount > 0:
@@ -301,51 +476,58 @@ class MainWindow:
                 elif stock.profit_loss_amount < 0:
                     tags.append("loss")
             
-            # Insert the item with tags
-            item = self.tree.insert("", "end", values=values, tags=tags)
-            print(f"DEBUG update_portfolio_display: Inserted item {item} for {stock.symbol}")
+            items_to_insert.append((values, tags))
         
-        # Configure tags for colors
+        print(f"DEBUG: About to insert {len(items_to_insert)} items into TreeView...")
+        
+        # Insert all items
+        inserted_items = []
+        for i, (values, tags) in enumerate(items_to_insert):
+            item = self.tree.insert("", "end", values=values, tags=tags)
+            inserted_items.append((item, values[0]))  # Store item ID and symbol
+            
+            # Debug first few insertions
+            if i < 3:
+                print(f"DEBUG: Inserted item {i+1}: {values[0]} with current_price={values[4]}")
+        
+        print(f"DEBUG: TreeView updated successfully with {len(items_to_insert)} items")
+        
+        # Restore selection
+        for item_id, symbol in inserted_items:
+            if symbol in selected_symbols:
+                self.tree.selection_add(item_id)
+        
+        # Configure tags for colors only once
         self.tree.tag_configure("profit", foreground=AppConfig.COLORS['profit'])
         self.tree.tag_configure("loss", foreground=AppConfig.COLORS['loss'])
         
-        # Force tree update
-        self.tree.update_idletasks()
+        # Update dashboard
+        self.update_dashboard()
         
-        final_items = self.tree.get_children()
-        print(f"DEBUG update_portfolio_display: Final tree has {len(final_items)} items")
+        # Update notifications
+        if hasattr(self, 'notifications_panel') and self.notifications_panel:
+            self.notifications_panel.update_stocks(self.stocks)
     
     def update_summary_display(self):
         self.portfolio_summary = self.calculator.calculate_portfolio_summary(self.stocks)
         
-        self.total_investment_label.config(
-            text=f"Total Investment: {FormatHelper.format_currency(self.portfolio_summary.total_investment)}")
-        
-        self.current_value_label.config(
-            text=f"Current Value: {FormatHelper.format_currency(self.portfolio_summary.current_value)}")
-        
-        profit_loss_text = f"Total P&L: {FormatHelper.format_currency(self.portfolio_summary.total_profit_loss)} " \
-                          f"({FormatHelper.format_percentage(self.portfolio_summary.total_profit_loss_percentage)})"
-        
-        self.profit_loss_label.config(
-            text=profit_loss_text,
-            foreground=AppConfig.COLORS[
-                'profit' if self.portfolio_summary.total_profit_loss > 0 else 
-                'loss' if self.portfolio_summary.total_profit_loss < 0 else 'neutral'
-            ]
-        )
-        
-        self.stocks_count_label.config(text=f"Stocks: {self.portfolio_summary.total_stocks}")
+        # Portfolio summary is now only shown in the dashboard
+        # No duplicate summary labels needed
         
         # Update cash balance
         try:
             cash_balance = self.db_manager.get_current_cash_balance()
-            self.cash_balance_label.config(
-                text=f"Available Cash: {FormatHelper.format_currency(cash_balance)}",
-                foreground="green" if cash_balance > 0 else "red" if cash_balance < 0 else "black"
-            )
+            self.cash_balance_var.set(f"Available Cash: {FormatHelper.format_currency(cash_balance)}")
+            # Update color based on balance
+            if cash_balance > 0:
+                self.cash_balance_status.config(foreground="green")
+            elif cash_balance < 0:
+                self.cash_balance_status.config(foreground="red")
+            else:
+                self.cash_balance_status.config(foreground="black")
         except Exception as e:
-            self.cash_balance_label.config(text="Available Cash: ₹0.00")
+            self.cash_balance_var.set("Available Cash: ₹0.00")
+            self.cash_balance_status.config(foreground="black")
     
     def refresh_portfolio(self):
         """Refresh the entire portfolio from database"""
@@ -364,8 +546,383 @@ class MainWindow:
             messagebox.showinfo("Info", "No stocks to update")
             return
         
-        # Run price update in background thread
-        threading.Thread(target=self._refresh_prices_background, daemon=True).start()
+        # Use normal enhanced price refresh
+        self._normal_refresh_prices()
+    
+    def _normal_refresh_prices(self):
+        """Normal price refresh using enhanced price fetcher"""
+        if self.is_updating:
+            return
+            
+        # Start normal refresh in background
+        threading.Thread(target=self._normal_refresh_background, daemon=True).start()
+    
+    def _normal_refresh_background(self):
+        """Normal background refresh with enhanced price fetcher"""
+        self.is_updating = True
+        self.root.after(0, lambda: self.status_var.set("Refreshing prices..."))
+        if hasattr(self, 'refresh_btn'):
+            self.root.after(0, lambda: self.refresh_btn.config(state="disabled"))
+        
+        try:
+            symbols = [stock.symbol for stock in self.stocks]
+            
+            # Show progress
+            self.root.after(0, lambda: self.status_var.set(f"Fetching prices for {len(symbols)} stocks..."))
+            
+            # Use enhanced price fetcher (normal speed)
+            start_time = time.time()
+            print(f"DEBUG: About to fetch prices for symbols: {symbols[:3]}...")
+            price_results = get_multiple_prices(symbols)
+            fetch_time = time.time() - start_time
+            
+            print(f"DEBUG: Price fetcher returned: {type(price_results)}")
+            print(f"DEBUG: Sample price results: {dict(list(price_results.items())[:3]) if price_results else 'Empty'}")
+            
+            # Update stocks with new prices
+            updated_count = 0
+            successful_updates = []
+            
+            print(f"DEBUG: Normal refresh got {len(price_results)} price results")
+            
+            for stock in self.stocks:
+                print(f"DEBUG: Processing {stock.symbol}...")
+                
+                if stock.symbol in price_results:
+                    new_price = price_results[stock.symbol]
+                    print(f"DEBUG: Found price data for {stock.symbol}: {new_price}")
+                    
+                    if new_price is not None and new_price > 0:
+                        old_price = stock.current_price
+                        print(f"DEBUG: {stock.symbol} - Old: {old_price}, New: {new_price}")
+                        
+                        # Update stock object
+                        stock.current_price = new_price
+                        print(f"DEBUG: Updated stock object current_price to {stock.current_price}")
+                        
+                        # Update database with new price
+                        try:
+                            self.db_manager.update_price_cache(stock.symbol, new_price)
+                            print(f"DEBUG: Updated database cache for {stock.symbol}")
+                            
+                            # Verify database update immediately
+                            cached_data = self.db_manager.get_cached_price(stock.symbol)
+                            if cached_data:
+                                print(f"DEBUG: Verified DB has price {cached_data['current_price']} for {stock.symbol}")
+                            else:
+                                print(f"ERROR: Database verification failed for {stock.symbol}")
+                            
+                            updated_count += 1
+                            successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
+                            
+                        except Exception as e:
+                            print(f"ERROR: Failed to update {stock.symbol} in database: {e}")
+                    else:
+                        print(f"DEBUG: Invalid price for {stock.symbol}: {new_price}")
+                else:
+                    print(f"DEBUG: No price data found for {stock.symbol}")
+            
+            self.last_update_time = datetime.now()
+            
+            # Success message
+            success_msg = f"Updated {updated_count}/{len(symbols)} prices in {fetch_time:.1f}s"
+            print(f"DEBUG: {success_msg}")
+            
+            # Complete refresh on main thread
+            self.root.after(0, lambda: self._normal_refresh_complete(updated_count, len(symbols), fetch_time, success_msg))
+            
+        except Exception as e:
+            print(f"ERROR in normal refresh: {e}")
+            error_msg = f"Error during price refresh: {str(e)}"
+            self.root.after(0, lambda: self._normal_refresh_error(error_msg))
+    
+    def _normal_refresh_complete(self, updated_count, total_count, fetch_time, success_msg):
+        """Complete normal price refresh"""
+        print(f"DEBUG: Completing normal price refresh")
+        
+        # Reload from database to ensure we have latest data
+        try:
+            print(f"DEBUG: About to reload stocks from database...")
+            stock_data = self.db_manager.get_all_stocks()
+            
+            print(f"DEBUG: Database returned {len(stock_data)} stocks")
+            for data in stock_data[:3]:
+                print(f"  DB Stock {data.get('symbol')}: price={data.get('current_price')}")
+            
+            # Create new stock objects
+            old_stock_count = len(self.stocks)
+            self.stocks = [Stock(**data) for data in stock_data]
+            
+            print(f"DEBUG: Created {len(self.stocks)} stock objects (was {old_stock_count})")
+            for stock in self.stocks[:3]:
+                print(f"  Stock object {stock.symbol}: current_price={stock.current_price}")
+                
+        except Exception as e:
+            print(f"ERROR: Failed to reload from database: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print(f"DEBUG: About to update portfolio display...")
+        # Update displays
+        self.update_portfolio_display()
+        print(f"DEBUG: Portfolio display updated")
+        
+        self.update_summary_display()
+        print(f"DEBUG: Summary display updated")
+        
+        # Update notifications with latest stock data
+        if hasattr(self, 'notifications_panel') and self.notifications_panel:
+            print(f"DEBUG: Updating notifications panel with {len(self.stocks)} stocks")
+            self.notifications_panel.update_stocks(self.stocks)
+            print(f"DEBUG: Notifications panel updated")
+        else:
+            print(f"DEBUG: No notifications panel available for update")
+        
+        # Update UI elements
+        update_text = f"Last updated: {self.last_update_time.strftime('%H:%M:%S')}"
+        if hasattr(self, 'update_label'):
+            self.update_label.config(text=update_text)
+        
+        self.status_var.set(f"Price refresh complete: {success_msg}")
+        print(f"DEBUG: Status updated: {success_msg}")
+        
+        # Re-enable refresh button
+        if hasattr(self, 'refresh_btn'):
+            self.refresh_btn.config(state="normal")
+        
+        self.is_updating = False
+        print(f"DEBUG: Normal refresh completed successfully - UI should now show updated prices")
+    
+    def _normal_refresh_error(self, error_msg):
+        """Handle normal refresh error"""
+        self.status_var.set(error_msg)
+        if hasattr(self, 'refresh_btn'):
+            self.refresh_btn.config(state="normal")
+        self.is_updating = False
+        messagebox.showerror("Price Refresh Error", error_msg)
+    
+    def _blazing_fast_refresh(self):
+        """Blazing fast refresh - simplest and fastest method"""
+        if self.is_updating:
+            return
+            
+        # Start blazing fast refresh in background
+        threading.Thread(target=self._blazing_fast_refresh_background, daemon=True).start()
+    
+    def _blazing_fast_refresh_background(self):
+        """Blazing fast background refresh - maximum speed"""
+        self.is_updating = True
+        self.root.after(0, lambda: self.status_var.set("Blazing fast refresh starting..."))
+        if hasattr(self, 'refresh_btn'):
+            self.root.after(0, lambda: self.refresh_btn.config(state="disabled"))
+        
+        try:
+            symbols = [stock.symbol for stock in self.stocks]
+            
+            # Show progress
+            self.root.after(0, lambda: self.status_var.set(f"Fetching {len(symbols)} prices with maximum speed..."))
+            
+            # Use blazing fast refresh method
+            start_time = time.time()
+            price_results = get_prices_blazing_fast(symbols)
+            fetch_time = time.time() - start_time
+            
+            # Update stocks with new prices
+            updated_count = 0
+            successful_updates = []
+            
+            print(f"DEBUG: Got prices for {len(price_results)} symbols")
+            print(f"DEBUG: Price results: {dict(list(price_results.items())[:3])}...")  # Show first 3
+            
+            for stock in self.stocks:
+                if stock.symbol in price_results and price_results[stock.symbol] is not None:
+                    old_price = stock.current_price
+                    new_price = price_results[stock.symbol]
+                    
+                    print(f"DEBUG: {stock.symbol} - Old: {old_price}, New: {new_price}")
+                    
+                    # Check if price actually changed
+                    if old_price != new_price:
+                        print(f"DEBUG: Price changed for {stock.symbol}: {old_price} -> {new_price}")
+                    else:
+                        print(f"DEBUG: Price unchanged for {stock.symbol}: {old_price}")
+                    
+                    stock.current_price = new_price
+                    
+                    # Update database with new price
+                    try:
+                        self.db_manager.update_price_cache(stock.symbol, stock.current_price)
+                        
+                        # Verify database update
+                        cached_price = self.db_manager.get_cached_price(stock.symbol)
+                        if cached_price:
+                            print(f"DEBUG: Verified DB update for {stock.symbol}: {cached_price['current_price']}")
+                        
+                        updated_count += 1
+                        successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
+                        print(f"DEBUG: Updated {stock.symbol} price successfully in DB")
+                    except Exception as e:
+                        print(f"ERROR: Failed to update {stock.symbol} in database: {e}")
+                else:
+                    print(f"DEBUG: No price data for {stock.symbol}")
+            
+            print(f"DEBUG: Successfully updated {updated_count} prices: {successful_updates[:3]}...")
+            print(f"DEBUG: About to set last_update_time and complete refresh")
+            
+            self.last_update_time = datetime.now()
+            
+            # Success message with speed info and details
+            success_msg = f"Updated {updated_count}/{len(symbols)} prices in {fetch_time:.1f}s ({len(symbols)/fetch_time:.1f} stocks/sec)"
+            print(f"DEBUG: Success message: {success_msg}")
+            
+            # Add sample of updated prices to success message
+            if successful_updates:
+                sample_updates = ", ".join(successful_updates[:3])
+                success_msg += f" | Examples: {sample_updates}"
+            
+            # Update UI on main thread
+            self.root.after(0, lambda: self._blazing_fast_complete(updated_count, len(symbols), fetch_time, success_msg))
+            
+        except Exception as e:
+            error_msg = f"Fast refresh failed: {str(e)}"
+            self.root.after(0, lambda: self.status_var.set(error_msg))
+            self.root.after(0, lambda: messagebox.showerror("Refresh Error", f"Failed to refresh prices:\n{str(e)}"))
+        
+        finally:
+            self.is_updating = False
+            if hasattr(self, 'refresh_btn'):
+                self.root.after(0, lambda: self.refresh_btn.config(state="normal"))
+    
+    def _blazing_fast_complete(self, updated_count, total_count, fetch_time, success_msg):
+        """Complete blazing fast refresh"""
+        print(f"DEBUG: Completing blazing fast refresh - updating UI")
+        
+        # Force reload from database to ensure we have latest data
+        try:
+            print(f"DEBUG: Reloading portfolio from database")
+            stock_data = self.db_manager.get_all_stocks()
+            
+            print(f"DEBUG: Raw stock data from DB:")
+            for data in stock_data[:3]:  # Show first 3 stocks
+                print(f"  {data.get('symbol', 'NO_SYMBOL')}: current_price={data.get('current_price', 'NO_PRICE')}")
+            
+            self.stocks = [Stock(**data) for data in stock_data]
+            
+            print(f"DEBUG: Stock objects after reload:")
+            for stock in self.stocks[:3]:  # Show first 3 stocks
+                print(f"  {stock.symbol}: current_price={stock.current_price}, current_value={stock.current_value}")
+                
+            print(f"DEBUG: Reloaded {len(self.stocks)} stocks from database")
+        except Exception as e:
+            print(f"ERROR: Failed to reload from database: {e}")
+        
+        print(f"DEBUG: About to update portfolio display...")
+        # Update displays
+        self.update_portfolio_display()
+        print(f"DEBUG: Portfolio display updated")
+        self.update_summary_display()
+        print(f"DEBUG: Summary display updated")
+        
+        # Show performance info
+        update_text = f"Last updated: {self.last_update_time.strftime('%H:%M:%S')} (BLAZING FAST: {fetch_time:.1f}s)"
+        if hasattr(self, 'update_label'):
+            self.update_label.config(text=update_text)
+        self.status_var.set(f"BLAZING FAST: {success_msg}")
+        
+        print(f"DEBUG: All UI updates complete")
+        
+        # Show success message with more detail
+        messagebox.showinfo(
+            "Blazing Fast Refresh Complete!",
+            f"Successfully refreshed {updated_count}/{total_count} prices\n"
+            f"Time taken: {fetch_time:.1f} seconds\n"
+            f"Speed: {total_count/fetch_time:.1f} stocks per second!\n\n"
+            f"Note: Portfolio display has been updated with new prices.\n"
+            f"Check console for detailed debug information."
+        )
+
+    def _ultra_fast_direct_refresh(self):
+        """Direct ultra-fast refresh without dialog"""
+        if self.is_updating:
+            return
+            
+        # Start ultra-fast refresh in background
+        threading.Thread(target=self._ultra_fast_refresh_background, daemon=True).start()
+    
+    def _ultra_fast_refresh_background(self):
+        """Ultra-fast background refresh with progress updates"""
+        self.is_updating = True
+        self.root.after(0, lambda: self.status_var.set("🚀 Ultra-fast refresh starting..."))
+        self.root.after(0, lambda: self.refresh_btn.config(state="disabled"))
+        
+        try:
+            symbols = [stock.symbol for stock in self.stocks]
+            
+            # Show progress
+            self.root.after(0, lambda: self.status_var.set(f"⚡ Fetching {len(symbols)} prices concurrently..."))
+            
+            # Use ultra-fast fetcher with maximum performance
+            start_time = time.time()
+            detailed_prices = ultra_fast_price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            fetch_time = time.time() - start_time
+            
+            # Update database and stocks with better error handling
+            updated_count = 0
+            cache_hits = 0
+            
+            for stock in self.stocks:
+                if stock.symbol in detailed_prices:
+                    price_data = detailed_prices[stock.symbol]
+                    if price_data and 'current_price' in price_data:
+                        old_price = stock.current_price
+                        stock.current_price = price_data['current_price']
+                        
+                        # Only update database if price actually changed
+                        if old_price != stock.current_price:
+                            self.db_manager.update_price_cache(stock.symbol, stock.current_price)
+                            updated_count += 1
+                        
+                        # Track cache hits
+                        if 'cached' in price_data.get('source', ''):
+                            cache_hits += 1
+            
+            self.last_update_time = datetime.now()
+            
+            # Show success with performance stats
+            cache_rate = (cache_hits / len(symbols) * 100) if symbols else 0
+            success_msg = (f"✅ Updated {updated_count}/{len(symbols)} prices in {fetch_time:.1f}s "
+                          f"(Cache: {cache_hits}/{len(symbols)} = {cache_rate:.0f}%)")
+            
+            # Update UI on main thread with performance info
+            self.root.after(0, lambda: self._ultra_fast_refresh_complete(updated_count, len(symbols), fetch_time, success_msg))
+            
+        except Exception as e:
+            error_msg = f"❌ Ultra-fast refresh failed: {str(e)}"
+            self.root.after(0, lambda: self.status_var.set(error_msg))
+            self.root.after(0, lambda: messagebox.showerror("Refresh Error", f"Failed to refresh prices:\n{str(e)}"))
+        
+        finally:
+            self.is_updating = False
+            self.root.after(0, lambda: self.refresh_btn.config(state="normal"))
+    
+    def _ultra_fast_refresh_complete(self, updated_count, total_count, fetch_time, success_msg):
+        """Complete ultra-fast refresh with performance stats"""
+        self.update_portfolio_display()
+        self.update_summary_display()
+        
+        # Show performance info
+        update_text = f"Last updated: {self.last_update_time.strftime('%H:%M:%S')} ({fetch_time:.1f}s)"
+        self.update_label.config(text=update_text)
+        self.status_var.set(success_msg)
+        
+        # Show performance popup for user feedback
+        if fetch_time < 5.0:  # Only show if actually fast
+            messagebox.showinfo(
+                "Ultra-Fast Refresh Complete! 🚀",
+                f"Successfully refreshed {updated_count}/{total_count} prices\n"
+                f"Time taken: {fetch_time:.1f} seconds\n\n"
+                f"Performance: {total_count/fetch_time:.1f} stocks/second!"
+            )
     
     def _refresh_prices_background(self):
         self.is_updating = True
@@ -374,18 +931,28 @@ class MainWindow:
         
         try:
             symbols = [stock.symbol for stock in self.stocks]
-            prices = self.price_fetcher.get_multiple_prices(symbols)
             
-            # Update database and stocks
+            # Use ultra-fast price fetcher with aggressive optimizations
+            detailed_prices = self.price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            
+            # Update database and stocks with better error handling
+            updated_count = 0
             for stock in self.stocks:
-                if stock.symbol in prices and prices[stock.symbol] is not None:
-                    stock.current_price = prices[stock.symbol]
-                    self.db_manager.update_price_cache(stock.symbol, stock.current_price)
+                if stock.symbol in detailed_prices:
+                    price_data = detailed_prices[stock.symbol]
+                    if price_data and 'current_price' in price_data:
+                        old_price = stock.current_price
+                        stock.current_price = price_data['current_price']
+                        
+                        # Only update database if price actually changed
+                        if old_price != stock.current_price:
+                            self.db_manager.update_price_cache(stock.symbol, stock.current_price)
+                            updated_count += 1
             
             self.last_update_time = datetime.now()
             
-            # Update UI on main thread
-            self.root.after(0, self._update_ui_after_refresh)
+            # Update UI on main thread with progress info
+            self.root.after(0, lambda: self._update_ui_after_refresh(updated_count, len(symbols)))
             
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to update prices: {str(e)}"))
@@ -395,13 +962,17 @@ class MainWindow:
             self.is_updating = False
             self.root.after(0, lambda: self.refresh_btn.config(state="normal"))
     
-    def _update_ui_after_refresh(self):
+    def _update_ui_after_refresh(self, updated_count=0, total_count=0):
         self.update_portfolio_display()
         self.update_summary_display()
         
         update_text = f"Last updated: {self.last_update_time.strftime('%H:%M:%S')}"
         self.update_label.config(text=update_text)
-        self.status_var.set("Prices updated successfully")
+        
+        if updated_count > 0:
+            self.status_var.set(f"Updated {updated_count}/{total_count} prices successfully")
+        else:
+            self.status_var.set("Prices refreshed (no changes detected)")
     
     def add_stock(self):
         try:
@@ -573,6 +1144,21 @@ class MainWindow:
     def on_stock_double_click(self, event):
         self.edit_stock()
     
+    def on_user_changed(self, event=None):
+        """Handle user selection change"""
+        selected_user = self.user_var.get()
+        if selected_user and selected_user in self.user_mapping:
+            user_id = self.user_mapping[selected_user]
+            
+            # Set the active user in database
+            self.db_manager.set_active_user(user_id)
+            
+            # Reload portfolio data for the new user
+            self.load_portfolio()
+            self.update_dashboard()
+            
+            # Cash balance will be updated when dashboard refreshes
+    
     def manage_cash(self):
         """Open cash management dialog"""
         try:
@@ -597,14 +1183,14 @@ class MainWindow:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open tax report: {str(e)}")
     
+    def get_theme_button_text(self):
+        """Get appropriate text for the theme button - always light mode now"""
+        return "Light Mode"
+    
     def toggle_theme(self):
-        """Toggle between light and dark themes"""
+        """Apply light theme only"""
         self.theme_manager.toggle_theme()
         self.apply_theme()
-        
-        # Update theme button text
-        theme_text = "Dark Mode" if self.theme_manager.current_theme == "light" else "Light Mode"
-        self.theme_btn.configure(text=theme_text)
     
     def apply_theme(self):
         """Apply current theme to all widgets"""
@@ -676,6 +1262,7 @@ class MainWindow:
             print(f"Warning: Could not sort by {sort_field}: {e}")
         
         return filtered_stocks
+    
     
     def run(self):
         try:
