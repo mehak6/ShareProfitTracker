@@ -760,8 +760,8 @@ class MainWindow:
                     
                     stock.current_price = new_price
                     
-                        updated_count += 1
-                        successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
+                    updated_count += 1
+                    successful_updates.append(f"{stock.symbol}: {FormatHelper.format_currency(new_price)}")
                 else:
                     print(f"DEBUG: No price data for {stock.symbol}")
             
