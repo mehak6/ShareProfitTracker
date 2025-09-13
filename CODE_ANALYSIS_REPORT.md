@@ -750,6 +750,24 @@ By following this roadmap, the ShareProfitTracker will transform from a function
 
 Completed now:
 - Database performance: Added essential indexes in `data/database.py` to accelerate frequent queries and joins.
+- Price fetching: Wired UI to `services/unified_price_service.py` in `gui/main_window.py` to remove direct usage of legacy fetchers and standardize price data.
+- DB layer prep: Swapped `DatabaseManager` to `AsyncDatabaseManager` in `gui/main_window.py` (structural change enabling non-blocking DB operations in upcoming commits).
+
+Expected impact:
+- Faster portfolio loads and summary computations
+- Quicker cash/expenses/dividends views and reports
+- Reduced CPU for repeated lookups
+
+Next in queue:
+- Migrate UI DB operations to `data/async_database` async methods with main-thread marshaling (replace synchronous wrappers to avoid UI blocking)
+- Remove redundant fetcher modules after verifying unified service covers all call sites
+
+---
+
+## ✅ Phase 2 Progress Update (This Commit)
+
+Completed now:
+- Database performance: Added essential indexes in `data/database.py` to accelerate frequent queries and joins.
 
 Indexes created (idempotent):
 - idx_stocks_user_symbol, idx_stocks_user_id

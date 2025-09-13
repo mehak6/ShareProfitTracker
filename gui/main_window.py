@@ -8,11 +8,14 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.database import DatabaseManager
+from data.async_database import AsyncDatabaseManager
 from data.models import Stock, PortfolioSummary
-from services.enhanced_price_fetcher import enhanced_price_fetcher, get_current_price, get_multiple_prices
-from services.ultra_fast_price_fetcher import ultra_fast_price_fetcher, get_multiple_prices_ultra_fast, get_detailed_price_data_ultra_fast
-from services.simple_fast_refresh import get_prices_blazing_fast
+from services.unified_price_service import (
+    get_current_price,
+    get_multiple_prices,
+    get_multiple_prices_ultra_fast,
+    get_detailed_price_data_ultra_fast,
+)
 from services.calculator import PortfolioCalculator
 from utils.config import AppConfig
 from utils.helpers import FormatHelper, FileHelper
@@ -31,8 +34,7 @@ except ImportError:
 class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
-        self.db_manager = DatabaseManager(AppConfig.get_database_path())
-        self.price_fetcher = ultra_fast_price_fetcher  # Use ultra-fast fetcher
+        self.db_manager = AsyncDatabaseManager(AppConfig.get_database_path())
         self.calculator = PortfolioCalculator()
         self.theme_manager = ThemeManager()
         
@@ -863,7 +865,7 @@ class MainWindow:
             
             # Use ultra-fast fetcher with maximum performance
             start_time = time.time()
-            detailed_prices = ultra_fast_price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            detailed_prices = get_detailed_price_data_ultra_fast(symbols)
             fetch_time = time.time() - start_time
             
             # Update database and stocks with better error handling
@@ -933,7 +935,7 @@ class MainWindow:
             symbols = [stock.symbol for stock in self.stocks]
             
             # Use ultra-fast price fetcher with aggressive optimizations
-            detailed_prices = self.price_fetcher.get_multiple_prices_ultra_fast(symbols)
+            detailed_prices = get_detailed_price_data_ultra_fast(symbols)
             
             # Update database and stocks with better error handling
             updated_count = 0
