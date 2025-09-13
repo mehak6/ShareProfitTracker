@@ -752,6 +752,16 @@ Completed now:
 - Database performance: Added essential indexes in `data/database.py` to accelerate frequent queries and joins.
 - Price fetching: Wired UI to `services/unified_price_service.py` in `gui/main_window.py` to remove direct usage of legacy fetchers and standardize price data.
 - DB layer prep: Swapped `DatabaseManager` to `AsyncDatabaseManager` in `gui/main_window.py` (structural change enabling non-blocking DB operations in upcoming commits).
+ 
+ Additional work to complete Phase 2:
+ - UI responsiveness: Ported heavy DB flows to non-blocking paths
+   - `load_portfolio()` now fetches via `get_all_stocks_async()` in a background thread and updates UI via `root.after(...)`.
+   - Price refresh flows (normal, blazing, ultra-fast) now batch-persist price cache updates using `update_price_cache_async(...)` with `asyncio.gather` in their background threads.
+   - Post-refresh DB reloads now call `load_portfolio()` instead of blocking reads on the main thread.
+ 
+ Result:
+ - No blocking DB calls on the Tk main thread in core flows (load + refresh)
+ - Consolidated price fetching across all refresh modes via unified service
 
 Expected impact:
 - Faster portfolio loads and summary computations
@@ -759,8 +769,8 @@ Expected impact:
 - Reduced CPU for repeated lookups
 
 Next in queue:
-- Migrate UI DB operations to `data/async_database` async methods with main-thread marshaling (replace synchronous wrappers to avoid UI blocking)
-- Remove redundant fetcher modules after verifying unified service covers all call sites
+- Remove redundant fetcher modules after verifying they’re unused (tests/docs reference only)
+- Add user-facing progress indicators and error toasts for network failures
 
 ---
 
