@@ -41,9 +41,7 @@ Result: Clean separation of concerns ✨
 **Code Reduction:**
 ```
 DELETED:
-❌ services/enhanced_price_fetcher.py (200+ lines)
-❌ services/ultra_fast_price_fetcher.py (300+ lines) 
-❌ services/simple_fast_refresh.py (150+ lines)
+✅ Consolidated into services/unified_price_service.py (legacy fetchers removed)
 
 REPLACED WITH:
 ✅ services/unified_price_service.py (500 lines)
@@ -117,9 +115,12 @@ async def load_portfolio_async(self):
 ### **2. Unified Price Fetching**
 ```python
 # OLD: Multiple fetchers with duplicate code
-enhanced_price_fetcher.get_multiple_prices(symbols)
-ultra_fast_price_fetcher.get_multiple_prices_ultra_fast(symbols) 
-simple_fast_refresh.get_prices_blazing_fast(symbols)
+from services.unified_price_service import (
+    get_multiple_prices,
+    get_detailed_price_data_ultra_fast,
+)
+get_multiple_prices(symbols)
+get_detailed_price_data_ultra_fast(symbols)
 
 # NEW: Single interface with strategies
 unified_price_service.get_prices(symbols)  # Handles all strategies internally

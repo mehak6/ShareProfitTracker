@@ -9,7 +9,7 @@
 
 ## 🔧 Key Optimizations
 
-### 1. Ultra-Fast Price Fetcher (`services/ultra_fast_price_fetcher.py`)
+### 1. Unified Price Service (`services/unified_price_service.py`)
 - **Concurrent processing**: Up to 10 simultaneous API requests
 - **Smart caching**: 60-second TTL to avoid repeated API calls
 - **Connection pooling**: Reuse HTTP connections for better performance
@@ -57,7 +57,7 @@ Cache Features:
 ## 🏗️ Files Created/Modified
 
 ### New Files:
-1. `services/ultra_fast_price_fetcher.py` - Ultra-fast price fetching engine
+1. `services/unified_price_service.py` - Unified price fetching engine
 2. `gui/price_refresh_dialog.py` - Interactive refresh dialog with cache controls
 3. `ShareProfitTracker_UltraFast.spec` - Optimized build specification
 4. `build_ultra_fast.bat` - Build script for ultra-fast version
@@ -66,7 +66,7 @@ Cache Features:
 ### Modified Files:
 1. `gui/main_window.py` - Updated to use ultra-fast fetcher and new dialog
 2. `gui/add_stock_dialog.py` - Optimized stock addition with async processing
-3. `services/enhanced_price_fetcher.py` - Added concurrent batch processing
+3. Legacy fetchers removed; unified strategy stack handles concurrency and caching
 
 ## 🚀 Built Executables
 

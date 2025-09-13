@@ -42,7 +42,7 @@ Location: F:\share mkt\ShareProfitTracker\dist\ShareProfitTracker_UltraFast.exe
 
 ## 🔧 Technical Optimizations Implemented
 
-### 1. Simple Fast Refresh Engine (`services/simple_fast_refresh.py`)
+### 1. Unified Fast Refresh (`services/unified_price_service.py`)
 - **15 concurrent API requests** (vs 1 sequential before)
 - **5-second timeout** (vs 30+ seconds before)  
 - **Smart error handling** - continues even if some stocks fail
@@ -109,7 +109,7 @@ All stocks: 2-8 seconds total (fetched simultaneously!)
 
 ### Files Created:
 - ✅ `ShareProfitTracker_UltraFast.exe` - Main executable
-- ✅ `services/simple_fast_refresh.py` - Speed engine
+- ✅ Unified under `services/unified_price_service.py`
 - ✅ `build_ultra_fast.bat` - Rebuild script
 - ✅ Documentation and performance guides
 
